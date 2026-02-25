@@ -11,6 +11,7 @@ const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+require("dotenv").config();
 
 // -----------------------------------------------------------------------------
 // helpers & middleware
