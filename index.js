@@ -1,4 +1,4 @@
-// require("dotenv").config(); // Only needed for local development
+// Load environment variables (only for local development)
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
@@ -9,7 +9,6 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-// const path = require("path"); // Not needed for memory storage
 
 const app = express();
 
@@ -17,21 +16,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---------------- DATABASE CONNECTION (CACHED FOR SERVERLESS) ----------------
+// ---------------- BASIC ROUTE ----------------
+app.get("/", (req, res) => {
+  res.send("🚀 API is running...");
+});
+
+// ---------------- DATABASE CONNECTION ----------------
 const uri = process.env.MONGO_URI;
 const DB_NAME = "Nasir";
 
-// Global cache to reuse connection across serverless invocations
 let cachedClient = null;
 let cachedDb = null;
 
 async function connectDB() {
-  // 1. If we have a cached connection, reuse it
   if (cachedClient && cachedDb) {
     return { client: cachedClient, db: cachedDb };
   }
 
-  // 2. If no cache, create a new connection
   const client = new MongoClient(uri, {
     serverApi: {
       version: ServerApiVersion.v1,
@@ -43,20 +44,19 @@ async function connectDB() {
   try {
     await client.connect();
     const db = client.db(DB_NAME);
-    
-    // 3. Cache the connection
+
     cachedClient = client;
     cachedDb = db;
-    
+
     console.log("✅ MongoDB Connected & Cached");
     return { client, db };
   } catch (error) {
-    console.error("MongoDB Connection Error:", error);
+    console.error("❌ MongoDB Connection Error:", error);
     throw error;
   }
 }
 
-// Middleware to attach DB collections to request
+// Attach DB middleware
 const attachDB = async (req, res, next) => {
   try {
     const { db } = await connectDB();
@@ -65,7 +65,6 @@ const attachDB = async (req, res, next) => {
     req.casesCollection = db.collection("cases");
     next();
   } catch (err) {
-    console.error(err);
     res.status(500).json({ message: "Database connection failed" });
   }
 };
@@ -80,15 +79,15 @@ const auth = (req, res, next) => {
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
 
-// ---------------- MULTER (Memory Storage) ----------------
+// ---------------- MULTER ----------------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // Limit 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 // ---------------- AUTH ROUTES ----------------
@@ -118,7 +117,6 @@ app.post("/api/register", attachDB, async (req, res) => {
 
     res.json({ message: "Registered successfully" });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -149,8 +147,7 @@ app.post("/api/login", attachDB, async (req, res) => {
     );
 
     res.json({ token, role: user.role });
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -162,75 +159,77 @@ app.get("/api/cases", attachDB, async (req, res) => {
   try {
     const cases = await req.casesCollection.find().toArray();
     res.json(cases);
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ message: "Failed to fetch cases" });
   }
 });
 
 // Add case
-app.post("/api/cases", auth, attachDB, upload.single("image"), async (req, res) => {
-  try {
-    const { title, category, description } = req.body;
-    
-    // NOTE: req.file contains the buffer in memory.
-    // On Vercel, you cannot save to disk. You must upload this buffer
-    // to a cloud service (like Cloudinary, AWS S3, or Supabase) here.
-    // For now, we will store a placeholder string or base64 (not recommended for production).
+app.post(
+  "/api/cases",
+  auth,
+  attachDB,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const { title, category, description } = req.body;
 
-    let imageUrl = "";
-    if (req.file) {
-       // Example: Convert to Base64 (Caution: MongoDb document size limit is 16MB)
-       // imageUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-       
-       // Recommendation: Upload to Cloudinary here and get URL
-       // imageUrl = await uploadToCloudinary(req.file.buffer);
+      let imageUrl = "";
+
+      if (req.file) {
+        // For production: upload to Cloudinary / S3
+        // imageUrl = await uploadToCloudinary(req.file.buffer);
+      }
+
+      await req.casesCollection.insertOne({
+        title,
+        category,
+        description,
+        image: imageUrl,
+        userId: new ObjectId(req.user.id),
+        createdAt: new Date(),
+      });
+
+      res.json({ message: "Case added successfully" });
+    } catch {
+      res.status(500).json({ message: "Failed to add case" });
     }
-
-    await req.casesCollection.insertOne({
-      title,
-      category,
-      description,
-      image: imageUrl, 
-      userId: new ObjectId(req.user.id),
-      createdAt: new Date(),
-    });
-
-    res.json({ message: "Case added successfully" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to add case" });
   }
-});
+);
 
 // Delete case (Admin only)
 app.delete("/api/cases/:id", auth, attachDB, async (req, res) => {
   try {
-    // 1. Validate ObjectId format
     if (!ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ message: "Invalid Case ID format" });
+      return res.status(400).json({ message: "Invalid Case ID" });
     }
 
-    // 2. Check Role
-    if (req.user.role !== "admin")
+    if (req.user.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
+    }
 
-    // 3. Perform Delete
     const result = await req.casesCollection.deleteOne({
       _id: new ObjectId(req.params.id),
     });
 
-    // 4. Check if item was actually deleted
     if (result.deletedCount === 0) {
-      return res.status(404).json({ message: "Case not found or already deleted" });
+      return res.status(404).json({ message: "Case not found" });
     }
 
     res.json({ message: "Deleted successfully" });
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ message: "Delete failed" });
   }
 });
+
+// ---------------- RUN LOCALLY ----------------
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+}
 
 // ---------------- EXPORT FOR VERCEL ----------------
 module.exports = app;
