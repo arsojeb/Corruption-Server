@@ -9,19 +9,12 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
 
 const app = express();
 
 // ---------------- MIDDLEWARE ----------------
 app.use(cors());
 app.use(express.json());
-
-// Serve uploaded images statically
-const UPLOADS_DIR = path.join(__dirname, "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
-app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ---------------- DATABASE CONNECTION ----------------
 const uri = process.env.MONGO_URI;
@@ -82,12 +75,8 @@ const auth = (req, res, next) => {
   }
 };
 
-// ---------------- MULTER ----------------
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s/g, "_")}`)
-});
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
+// ---------------- MULTER (memory storage for Vercel) ----------------
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // ---------------- BASIC ROUTE ----------------
 app.get("/", (req, res) => res.send("🚀 API is running..."));
@@ -164,7 +153,13 @@ app.get("/api/cases", attachDB, async (req, res) => {
 app.post("/api/cases", auth, attachDB, upload.single("image"), async (req, res) => {
   try {
     const { title, category, description } = req.body;
-    let imageUrl = req.file ? `/uploads/${req.file.filename}` : "";
+
+    // Store image as base64 string in MongoDB (no disk needed on Vercel)
+    let imageUrl = "";
+    if (req.file) {
+      const base64 = req.file.buffer.toString("base64");
+      imageUrl = `data:${req.file.mimetype};base64,${base64}`;
+    }
 
     await req.casesCollection.insertOne({
       title,
