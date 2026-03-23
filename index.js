@@ -20,11 +20,6 @@ app.use(express.json());
 const uri = process.env.MONGO_URI;
 const DB_NAME = "Nasir";
 
-if (!uri) {
-  console.error("❌ MONGO_URI not defined in .env");
-  process.exit(1);
-}
-
 let cachedClient = null;
 let cachedDb = null;
 
@@ -45,7 +40,7 @@ async function connectDB() {
     console.log("✅ MongoDB Connected & Cached");
     return { client, db };
   } catch (err) {
-    console.error("❌ MongoDB Connection Error:", err.stack || err);
+    console.error("❌ MongoDB Connection Error:", err);
     throw err;
   }
 }
@@ -59,7 +54,7 @@ const attachDB = async (req, res, next) => {
     req.casesCollection = db.collection("cases");
     next();
   } catch (err) {
-    console.error("AttachDB Error:", err.stack || err);
+    console.error(err);
     res.status(500).json({ message: "Database connection failed" });
   }
 };
@@ -75,7 +70,7 @@ const auth = (req, res, next) => {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch (err) {
-    console.error("Auth Error:", err.stack || err);
+    console.error("Auth Error:", err);
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
@@ -94,6 +89,9 @@ app.post("/api/register", attachDB, async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ message: "All fields required" });
 
+    if (!req.usersCollection)
+      return res.status(500).json({ message: "Database not connected" });
+
     const existing = await req.usersCollection.findOne({ email });
     if (existing) return res.status(400).json({ message: "Email already registered" });
 
@@ -110,7 +108,7 @@ app.post("/api/register", attachDB, async (req, res) => {
 
     res.json({ message: "Registered successfully" });
   } catch (err) {
-    console.error("Register Error:", err.stack || err);
+    console.error("Register Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -130,15 +128,11 @@ app.post("/api/login", attachDB, async (req, res) => {
 
     if (user.blocked) return res.status(403).json({ message: "User is blocked" });
 
-    const token = jwt.sign(
-      { id: user._id.toString(), role: user.role }, // convert ObjectId to string
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" }
-    );
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
 
     res.json({ token, role: user.role });
   } catch (err) {
-    console.error("Login Error:", err.stack || err);
+    console.error("Login Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -150,19 +144,17 @@ app.get("/api/cases", attachDB, async (req, res) => {
     const cases = await req.casesCollection.find().toArray();
     res.json(cases);
   } catch (err) {
-    console.error("Get Cases Error:", err.stack || err);
+    console.error("Get Cases Error:", err);
     res.status(500).json({ message: "Failed to fetch cases" });
   }
 });
 
 // Add case
-app.post("/api/cases", attachDB, upload.single("image"), auth, async (req, res) => {
+app.post("/api/cases", auth, attachDB, upload.single("image"), async (req, res) => {
   try {
     const { title, category, description } = req.body;
-    if (!title || !category || !description)
-      return res.status(400).json({ message: "All fields required" });
 
-    // Store image as base64 string in MongoDB
+    // Store image as base64 string in MongoDB (no disk needed on Vercel)
     let imageUrl = "";
     if (req.file) {
       const base64 = req.file.buffer.toString("base64");
@@ -180,24 +172,23 @@ app.post("/api/cases", attachDB, upload.single("image"), auth, async (req, res) 
 
     res.json({ message: "Case added successfully" });
   } catch (err) {
-    console.error("Add Case Error:", err.stack || err);
+    console.error("Add Case Error:", err);
     res.status(500).json({ message: "Failed to add case" });
   }
 });
 
 // Delete case (Admin only)
-app.delete("/api/cases/:id", attachDB, auth, async (req, res) => {
+app.delete("/api/cases/:id", auth, attachDB, async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid Case ID" });
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ message: "Invalid Case ID" });
     if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
 
-    const result = await req.casesCollection.deleteOne({ _id: new ObjectId(id) });
+    const result = await req.casesCollection.deleteOne({ _id: new ObjectId(req.params.id) });
     if (result.deletedCount === 0) return res.status(404).json({ message: "Case not found" });
 
     res.json({ message: "Deleted successfully" });
   } catch (err) {
-    console.error("Delete Case Error:", err.stack || err);
+    console.error("Delete Case Error:", err);
     res.status(500).json({ message: "Delete failed" });
   }
 });
