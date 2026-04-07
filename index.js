@@ -18,7 +18,7 @@ app.use(express.json());
 
 // ---------------- DATABASE ----------------
 const uri = process.env.MONGO_URI;
-const DB_NAME = "Nasir";
+const DB_NAME = "Hadi";
 
 let cachedClient = null;
 let cachedDb = null;
