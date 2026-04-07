@@ -24,29 +24,26 @@ let cachedClient = null;
 let cachedDb = null;
 
 async function connectDB() {
-  if (cachedClient && cachedDb) return { client: cachedClient, db: cachedDb };
-
-  try {
-    const client = new MongoClient(uri, {
-      serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-      },
-    });
-
-    await client.connect();
-    const db = client.db(DB_NAME);
-
-    cachedClient = client;
-    cachedDb = db;
-
-    console.log("✅ MongoDB Connected");
-    return { client, db };
-  } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
-    throw err;
+  if (cachedClient && cachedDb) {
+    return { client: cachedClient, db: cachedDb };
   }
+
+  const client = new MongoClient(uri, {
+    serverApi: {
+      version: ServerApiVersion.v1,
+      strict: true,
+      deprecationErrors: true,
+    },
+  });
+
+  await client.connect();
+  const db = client.db(DB_NAME);
+
+  cachedClient = client;
+  cachedDb = db;
+
+  console.log("✅ MongoDB Connected");
+  return { client, db };
 }
 
 // Attach DB
@@ -58,7 +55,7 @@ const attachDB = async (req, res, next) => {
     req.casesCollection = db.collection("cases");
     next();
   } catch (err) {
-    res.status(500).json({ message: "DB connection failed", error: err.message });
+    res.status(500).json({ message: "DB connection failed" });
   }
 };
 
@@ -94,12 +91,15 @@ app.get("/", (req, res) => {
 app.post("/api/register", attachDB, async (req, res) => {
   try {
     const { name = "", email, password } = req.body;
-    if (!email || !password)
+
+    if (!email || !password) {
       return res.status(400).json({ message: "All fields required" });
+    }
 
     const existing = await req.usersCollection.findOne({ email });
-    if (existing)
+    if (existing) {
       return res.status(400).json({ message: "Email already exists" });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -114,7 +114,6 @@ app.post("/api/register", attachDB, async (req, res) => {
 
     res.json({ message: "Registered successfully" });
   } catch (err) {
-    console.error("Register failed:", err.message);
     res.status(500).json({ message: "Register failed" });
   }
 });
@@ -139,111 +138,108 @@ app.post("/api/login", attachDB, async (req, res) => {
     );
 
     res.json({ token, role: user.role });
-  } catch (err) {
-    console.error("Login failed:", err.message);
+  } catch {
     res.status(500).json({ message: "Login failed" });
   }
 });
 
 // ---------------- CASE ROUTES ----------------
 
-// Get all cases
+// ✅ Get all cases
 app.get("/api/cases", attachDB, async (req, res) => {
   try {
-    let cases = await req.casesCollection.find().toArray();
-
-    // If empty, insert fake data
-    if (cases.length === 0) {
-      const fakeCases = [
-        {
-          title: "Lost Wallet",
-          category: "Lost & Found",
-          description: "Wallet lost near Central Park",
-          image: "",
-          createdAt: new Date(),
-        },
-        {
-          title: "Missing Dog",
-          category: "Pets",
-          description: "Golden retriever missing",
-          image: "",
-          createdAt: new Date(),
-        },
-      ];
-      await req.casesCollection.insertMany(fakeCases);
-      cases = await req.casesCollection.find().toArray();
-    }
-
+    const cases = await req.casesCollection.find().toArray();
     res.json(cases);
-  } catch (err) {
-    console.error("Failed to fetch cases:", err.message);
-    res.status(500).json({ message: "Failed to fetch cases", error: err.message });
+  } catch {
+    res.status(500).json({ message: "Failed to fetch cases" });
   }
 });
 
-// Get case by ID
+// ✅ Get case by ID (FIXED)
 app.get("/api/cases/:id", attachDB, async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid ID" });
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid ID" });
+    }
 
-    const caseData = await req.casesCollection.findOne({ _id: new ObjectId(id) });
-    if (!caseData) return res.status(404).json({ message: "Case not found" });
+    const caseData = await req.casesCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!caseData) {
+      return res.status(404).json({ message: "Case not found" });
+    }
 
     res.json(caseData);
   } catch (err) {
-    console.error("Failed to fetch case:", err.message);
-    res.status(500).json({ message: "Failed to fetch case", error: err.message });
+    res.status(500).json({ message: "Failed to fetch case" });
   }
 });
 
-// Add case
-app.post("/api/cases", auth, attachDB, upload.single("image"), async (req, res) => {
-  try {
-    const { title, category, description } = req.body;
+// ✅ Add case
+app.post(
+  "/api/cases",
+  auth,
+  attachDB,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const { title, category, description } = req.body;
 
-    let imageUrl = "";
-    if (req.file) {
-      const base64 = req.file.buffer.toString("base64");
-      imageUrl = `data:${req.file.mimetype};base64,${base64}`;
+      let imageUrl = "";
+      if (req.file) {
+        const base64 = req.file.buffer.toString("base64");
+        imageUrl = `data:${req.file.mimetype};base64,${base64}`;
+      }
+
+      await req.casesCollection.insertOne({
+        title,
+        category,
+        description,
+        image: imageUrl,
+        userId: new ObjectId(req.user.id),
+        createdAt: new Date(),
+      });
+
+      res.json({ message: "Case added" });
+    } catch {
+      res.status(500).json({ message: "Add failed" });
     }
-
-    await req.casesCollection.insertOne({
-      title,
-      category,
-      description,
-      image: imageUrl,
-      userId: new ObjectId(req.user.id),
-      createdAt: new Date(),
-    });
-
-    res.json({ message: "Case added" });
-  } catch (err) {
-    console.error("Add case failed:", err.message);
-    res.status(500).json({ message: "Add failed", error: err.message });
   }
-});
+);
 
-// Delete case (Admin only)
+// ✅ Delete case (Admin)
 app.delete("/api/cases/:id", auth, attachDB, async (req, res) => {
   try {
-    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ message: "Invalid ID" });
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: "Invalid ID" });
+    }
 
-    if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ message: "Admin only" });
+    }
 
-    const result = await req.casesCollection.deleteOne({ _id: new ObjectId(req.params.id) });
-    if (result.deletedCount === 0) return res.status(404).json({ message: "Not found" });
+    const result = await req.casesCollection.deleteOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Not found" });
+    }
 
     res.json({ message: "Deleted successfully" });
-  } catch (err) {
-    console.error("Delete failed:", err.message);
-    res.status(500).json({ message: "Delete failed", error: err.message });
+  } catch {
+    res.status(500).json({ message: "Delete failed" });
   }
 });
 
 // ---------------- SERVER ----------------
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => console.log(`🚀 Server on ${PORT}`));
+}
 
+// ---------------- EXPORT ----------------
 module.exports = app;
